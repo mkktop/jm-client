@@ -1,6 +1,13 @@
 name: Release Windows installers
 
 on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to build
+        required: true
+        type: string
+        default: v0.1.1
   push:
     tags:
       - 'v*'
@@ -9,7 +16,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: release-${{ github.ref }}
+  group: release-${{ inputs.tag || github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -18,9 +25,12 @@ jobs:
     timeout-minutes: 45
     env:
       CARGO_INCREMENTAL: '0'
+      RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
     steps:
       - name: Check out release source
         uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -40,9 +50,8 @@ jobs:
 
       - name: Validate release version
         shell: pwsh
-        env:
-          RELEASE_TAG: ${{ github.ref_name }}
         run: |
+          if ($env:RELEASE_TAG -notmatch '^v\d+\.\d+\.\d+$') { throw "A stable version tag is required." }
           $expected = $env:RELEASE_TAG -replace '^v', ''
           $package = Get-Content package.json -Raw | ConvertFrom-Json
           $config = Get-Content src-tauri/tauri.conf.json -Raw | ConvertFrom-Json
@@ -80,7 +89,7 @@ jobs:
       - name: Preserve release artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: windows-installers-${{ github.ref_name }}
+          name: windows-installers-${{ env.RELEASE_TAG }}
           path: release/*
           if-no-files-found: error
 
@@ -88,7 +97,6 @@ jobs:
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ github.ref_name }}
         run: |
           $files = @(Get-ChildItem release/ -File | ForEach-Object { $_.FullName })
           gh release create $env:RELEASE_TAG @files --verify-tag --draft --title "JM Client $env:RELEASE_TAG" --notes-file .github/release-notes.md
