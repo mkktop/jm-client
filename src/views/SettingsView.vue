@@ -6,9 +6,10 @@ import { useComicStore, type BlockedTagScope } from '../stores/comic'
 import AppIcon from '../components/AppIcon.vue'
 import BrandMark from '../components/BrandMark.vue'
 import AppUpdate from '../components/AppUpdate.vue'
+import { useUpdateStore } from '../stores/updates'
 const app = useAppStore()
 const comic = useComicStore()
-const currentVersion = ref('')
+const updates = useUpdateStore()
 const blockInput = ref('')
 function addBlocked() {
   const value = blockInput.value.trim()
@@ -666,7 +667,7 @@ async function save(kind: string) {
             <button v-else class="btn btn-primary btn-sm" @click="app.logout()">去登录</button>
           </div>
         </section>
-        <AppUpdate :current-version="currentVersion" @version="currentVersion = $event" />
+        <AppUpdate />
       </div>
       <aside class="settings-aside">
         <BrandMark />
@@ -675,7 +676,9 @@ async function save(kind: string) {
           专注看本的桌面客户端。支持发现、分类、排行榜、每周必看、账号收藏、章节下载和阅读进度记忆。
         </p>
         <small
-          >JM DESKTOP<template v-if="currentVersion"> · v{{ currentVersion }}</template></small
+          >JM DESKTOP<template v-if="updates.currentVersion">
+            · v{{ updates.currentVersion }}</template
+          ></small
         >
       </aside>
     </div>

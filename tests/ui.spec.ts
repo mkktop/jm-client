@@ -2,7 +2,7 @@ import { test, expect, type Page } from '@playwright/test'
 
 type Call = { cmd: string; args: any }
 
-async function fixture(page: Page, loggedIn = true) {
+async function fixture(page: Page, loggedIn = true, imagePlatform = 'windows') {
   await page.route('http://jmimg.localhost/**', (route) => {
     const url = route.request().url()
     const n = Math.abs(url.split('').reduce((sum, ch) => sum + ch.charCodeAt(0), 0)) % 6
@@ -16,7 +16,7 @@ async function fixture(page: Page, loggedIn = true) {
     })
   })
   await page.addInitScript(
-    ({ loggedIn }) => {
+    ({ loggedIn, imagePlatform }) => {
       const comics = Array.from({ length: 6 }, (_, i) => ({
         _id: 'c' + i,
         title:
@@ -65,29 +65,62 @@ async function fixture(page: Page, loggedIn = true) {
       state.__fail = ''
       state.__profile = profile
       state.__updateDelay = 0
+      state.__downloadDelay = 0
+      state.__pendingComicDownloads = false
+      state.__installed = false
+      const callbacks = new Map<number, (message: any) => void>()
+      let nextCallbackId = 0
       state.__updateResult = {
-        status: 'latest',
-        currentVersion: '0.1.0',
-        latestVersion: '0.1.0',
-        releaseNotes: null,
-        publishedAt: null
+        status: 'current',
+        current_version: '0.1.2',
+        version: null,
+        notes: null,
+        published_at: null,
+        can_install: false,
+        download_size: null,
+        installer_kind: null
       }
       state.isTauri = true
       state.__windowState = { maximized: false, minimized: false, closed: false }
       state.__TAURI_INTERNALS__ = {
         metadata: { currentWindow: { label: 'main' } },
+        convertFileSrc: (path: string, protocol: string) => {
+          const prefix =
+            imagePlatform === 'macos' ? `${protocol}://localhost/` : `http://${protocol}.localhost/`
+          return prefix + encodeURIComponent(path)
+        },
+        transformCallback: (callback: (message: any) => void) => {
+          const id = nextCallbackId++
+          callbacks.set(id, callback)
+          return id
+        },
+        unregisterCallback: (id: number) => callbacks.delete(id),
         invoke: async (cmd: string, args: any = {}) => {
           state.__calls.push({ cmd, args })
           if (state.__fail === cmd) throw '连接暂时不可用，请稍后重试'
           switch (cmd) {
-            case 'plugin:app|version':
-              return '0.1.0'
+            case 'get_app_version':
+              return '0.1.2'
             case 'check_for_updates':
               if (state.__updateDelay) {
                 await new Promise((resolve) => setTimeout(resolve, state.__updateDelay))
               }
               return state.__updateResult
-            case 'open_update_download':
+            case 'download_update': {
+              const callback = callbacks.get(args.onProgress.id)!
+              callback({ index: 0, message: { downloaded: 50, total: 100 } })
+              if (state.__downloadDelay)
+                await new Promise((resolve) => setTimeout(resolve, state.__downloadDelay))
+              callback({ index: 1, message: { downloaded: 100, total: 100 } })
+              callback({ index: 2, end: true })
+              return null
+            }
+            case 'install_update':
+              if (state.__pendingComicDownloads)
+                throw '还有漫画正在下载或排队，请等待下载完成后再安装更新'
+              state.__installed = true
+              return null
+            case 'open_update_release':
               return null
             case 'plugin:window|is_maximized':
               return state.__windowState.maximized
@@ -286,7 +319,7 @@ async function fixture(page: Page, loggedIn = true) {
         }
       }
     },
-    { loggedIn }
+    { loggedIn, imagePlatform }
   )
 }
 
@@ -370,87 +403,173 @@ test('weekly issues split issue number and date range', async ({ page }) => {
   await expect(page.locator('.comic-grid .comic-card').first()).toBeVisible()
 })
 
-test('update check is last in settings and distinguishes latest from unpublished', async ({
+async function availableUpdate(page: Page, installerKind = 'windows', canInstall = true) {
+  await page.evaluate(
+    ({ installerKind, canInstall }) => {
+      const state = window as any
+      state.__updateResult = {
+        status: 'available',
+        current_version: '0.1.2',
+        version: '0.1.3',
+        notes: '新增应用内下载与校验\n修复窗口缩放问题',
+        published_at: '2026-11-02T00:00:00Z',
+        can_install: canInstall,
+        download_size: canInstall ? 100 : null,
+        installer_kind: canInstall ? installerKind : null
+      }
+    },
+    { installerKind, canInstall }
+  )
+  await page.getByRole('button', { name: '检查更新', exact: true }).click()
+  await expect(page.getByRole('status').filter({ hasText: '发现新版本 v0.1.3' })).toBeVisible()
+}
+
+test('software update stays at the bottom and distinguishes current and unpublished', async ({
   page
 }) => {
   await fixture(page)
   await page.goto('/settings')
-  const updates = page.getByRole('region', { name: '版本与更新' })
-  await expect(page.locator('.settings-form > .setting-group').last()).toContainText('版本与更新')
-  await expect(updates.getByText('v0.1.0', { exact: true })).toBeVisible()
+  const updates = page.getByRole('region', { name: '软件更新' })
+  await expect(page.locator('.settings-form > .setting-group').last()).toContainText('软件更新')
+  await expect(updates.getByText('当前版本 v0.1.2', { exact: true })).toBeVisible()
+  await expect(page.locator('.settings-aside small')).toContainText('v0.1.2')
   expect((await calls(page)).some((call) => call.cmd === 'check_for_updates')).toBe(false)
   await updates.getByRole('button', { name: '检查更新', exact: true }).click()
   await expect(updates.getByRole('status')).toHaveText('当前已是最新版本')
-  await expect(updates.getByRole('button', { name: '下载新版本' })).toHaveCount(0)
-
-  await page.evaluate(() => {
-    const state = window as any
-    state.__updateResult = {
-      ...state.__updateResult,
-      status: 'unpublished',
-      latestVersion: null
-    }
-  })
+  await expect(updates.getByRole('button', { name: '下载更新' })).toHaveCount(0)
+  await page.evaluate(() => ((window as any).__updateResult.status = 'unpublished'))
   await updates.getByRole('button', { name: '检查更新', exact: true }).click()
   await expect(updates.getByRole('status')).toContainText('暂未发布正式版本')
-  await expect(updates.getByText('当前已是最新版本')).toHaveCount(0)
 })
 
-test('new releases show notes and open downloads only when requested', async ({ page }) => {
+test('update download reports progress and enables installation only after verification', async ({
+  page
+}) => {
   await fixture(page)
   await page.goto('/settings')
-  await page.evaluate(() => {
-    const state = window as any
-    state.__updateDelay = 500
-    state.__updateResult = {
-      status: 'available',
-      currentVersion: '0.1.0',
-      latestVersion: '0.2.0',
-      releaseNotes: '新增功能\n修复小窗口头像显示问题',
-      publishedAt: '2026-11-02T00:00:00Z'
-    }
-  })
-  const updates = page.getByRole('region', { name: '版本与更新' })
-  await updates.getByRole('button', { name: '检查更新', exact: true }).click()
-  await expect(updates.getByRole('button', { name: '正在检查…' })).toBeDisabled()
-  await expect(updates.getByRole('status')).toHaveText('发现新版本 v0.2.0')
-  await expect(updates.locator('.update-notes')).toContainText('修复小窗口头像显示问题')
-  expect((await calls(page)).filter((call) => call.cmd === 'check_for_updates')).toHaveLength(1)
-  expect((await calls(page)).some((call) => call.cmd === 'open_update_download')).toBe(false)
-  await page.evaluate(() => ((window as any).__fail = 'open_update_download'))
-  await updates.getByRole('button', { name: '下载新版本' }).click()
-  await expect(updates.getByRole('alert')).toContainText('打开下载页失败')
+  await page.evaluate(() => ((window as any).__updateDelay = 500))
+  await availableUpdate(page)
+  const updates = page.getByRole('region', { name: '软件更新' })
+  await updates.getByText('更新说明', { exact: true }).click()
+  await expect(updates.locator('.update-notes')).toContainText('新增应用内下载与校验')
+  expect((await calls(page)).some((call) => call.cmd === 'download_update')).toBe(false)
+  await page.evaluate(() => ((window as any).__downloadDelay = 600))
+  await updates.getByRole('button', { name: '下载更新' }).click()
+  await expect(updates.getByRole('progressbar', { name: '更新下载进度' })).toHaveAttribute(
+    'value',
+    '50'
+  )
+  await expect(updates.getByRole('button', { name: '检查更新', exact: true })).toBeDisabled()
+  await expect(updates.getByRole('button', { name: '退出并安装', exact: true })).toHaveCount(0)
+  await expect(
+    updates.getByRole('status').filter({ hasText: '安装包已下载并通过校验' })
+  ).toBeVisible()
+  await expect(updates.getByRole('button', { name: '退出并安装', exact: true })).toBeEnabled()
+  expect((await calls(page)).filter((call) => call.cmd === 'download_update')).toHaveLength(1)
+  expect((await calls(page)).some((call) => call.cmd === 'install_update')).toBe(false)
+})
+
+test('update download and verified state survive leaving settings', async ({ page }) => {
+  await fixture(page)
+  await page.goto('/settings')
+  await availableUpdate(page)
+  await page.evaluate(() => ((window as any).__downloadDelay = 2000))
+  await page.getByRole('button', { name: '下载更新' }).click()
+  await page.locator('.sidebar-navigation [title="分类浏览"]').click()
+  await expect(page.getByRole('region', { name: '软件更新' })).toHaveCount(0)
+  await page.locator('.sidebar-bottom [title="偏好设置"]').click()
+  await expect(page.getByRole('button', { name: '退出并安装', exact: true })).toBeVisible()
+  expect((await calls(page)).filter((call) => call.cmd === 'download_update')).toHaveLength(1)
+})
+
+test('failed downloads retry and active comic downloads prevent installation', async ({ page }) => {
+  await fixture(page)
+  await page.goto('/settings')
+  await availableUpdate(page)
+  const updates = page.getByRole('region', { name: '软件更新' })
+  await page.evaluate(() => ((window as any).__fail = 'download_update'))
+  await updates.getByRole('button', { name: '下载更新' }).click()
+  await expect(updates.getByRole('alert')).toContainText('下载更新失败')
+  await expect(updates.getByRole('button', { name: '退出并安装', exact: true })).toHaveCount(0)
   await page.evaluate(() => ((window as any).__fail = ''))
-  await updates.getByRole('button', { name: '下载新版本' }).click()
-  await expect(updates.getByRole('alert')).toHaveCount(0)
-  await expect(updates.getByText(/已在浏览器打开新版下载页/)).toBeVisible()
+  await updates.getByRole('button', { name: '下载更新' }).click()
+  await expect(updates.getByRole('button', { name: '退出并安装', exact: true })).toBeVisible()
+  await page.evaluate(() => ((window as any).__pendingComicDownloads = true))
+  await updates.getByRole('button', { name: '退出并安装', exact: true }).click()
+  await expect(updates.getByRole('alert')).toContainText('还有漫画正在下载或排队')
+  expect(await page.evaluate(() => (window as any).__installed)).toBe(false)
+  await page.evaluate(() => ((window as any).__pendingComicDownloads = false))
+  await updates.getByRole('button', { name: '退出并安装', exact: true }).click()
+  await expect(updates.getByRole('button', { name: '正在启动安装程序…' })).toBeDisabled()
+  expect(await page.evaluate(() => (window as any).__installed)).toBe(true)
 })
 
-test('failed update checks can retry without leaving stale download actions', async ({ page }) => {
+test('Apple Silicon update opens the verified DMG after quitting', async ({ page }) => {
   await fixture(page)
   await page.goto('/settings')
-  const updates = page.getByRole('region', { name: '版本与更新' })
-  await page.evaluate(() => {
-    const state = window as any
-    state.__updateResult.status = 'available'
-    state.__updateResult.latestVersion = '0.2.0'
-  })
-  await updates.getByRole('button', { name: '检查更新', exact: true }).click()
-  await expect(updates.getByRole('button', { name: '下载新版本' })).toBeVisible()
+  await availableUpdate(page, 'macos')
+  await page.getByRole('button', { name: '下载更新' }).click()
+  await expect(page.getByRole('button', { name: '退出并打开安装包', exact: true })).toBeVisible()
+  await expect(page.getByText(/拖入 Applications/)).toBeVisible()
+  await page.getByRole('button', { name: '退出并打开安装包', exact: true }).click()
+  await expect(page.getByRole('button', { name: '正在打开安装包…' })).toBeDisabled()
+  expect(await page.evaluate(() => (window as any).__installed)).toBe(true)
+})
+
+test('releases without matching verifiable installers keep the manual fallback', async ({
+  page
+}) => {
+  await fixture(page)
+  await page.goto('/settings')
+  await availableUpdate(page, 'windows', false)
+  const updates = page.getByRole('region', { name: '软件更新' })
+  await expect(updates.getByRole('button', { name: '下载更新' })).toHaveCount(0)
+  await expect(updates.getByText(/没有适配当前系统且可校验的安装包/)).toBeVisible()
+  await page.evaluate(() => ((window as any).__fail = 'open_update_release'))
+  await updates.getByRole('button', { name: '前往发布页' }).click()
+  await expect(updates.getByRole('alert')).toBeVisible()
+  await page.evaluate(() => ((window as any).__fail = ''))
+  await updates.getByRole('button', { name: '前往发布页' }).click()
+  await expect(updates.getByRole('alert')).toHaveCount(0)
+  expect((await calls(page)).filter((call) => call.cmd === 'open_update_release')).toHaveLength(2)
+})
+
+test('failed update checks clear stale installers and can retry', async ({ page }) => {
+  await fixture(page)
+  await page.goto('/settings')
+  await availableUpdate(page)
+  const updates = page.getByRole('region', { name: '软件更新' })
   await page.evaluate(() => ((window as any).__fail = 'check_for_updates'))
   await updates.getByRole('button', { name: '检查更新', exact: true }).click()
-  await expect(updates.getByRole('alert')).toContainText('检查失败')
-  await expect(updates.getByRole('button', { name: '下载新版本' })).toHaveCount(0)
-  await expect(updates.getByRole('button', { name: '检查更新', exact: true })).toBeEnabled()
+  await expect(updates.getByRole('alert')).toContainText('检查更新失败')
+  await expect(updates.getByRole('button', { name: '下载更新' })).toHaveCount(0)
   await page.evaluate(() => {
     const state = window as any
     state.__fail = ''
-    state.__updateResult.status = 'latest'
-    state.__updateResult.latestVersion = '0.1.0'
+    state.__updateResult.status = 'current'
   })
   await updates.getByRole('button', { name: '检查更新', exact: true }).click()
   await expect(updates.getByRole('status')).toHaveText('当前已是最新版本')
   await expect(updates.getByRole('alert')).toHaveCount(0)
+})
+
+test('macOS image URLs use the platform protocol and preserve encoded paths', async ({ page }) => {
+  await fixture(page, true, 'macos')
+  await page.goto('/settings')
+  const urls = await page.evaluate(async () => {
+    const { protocolUrl, toDisplayUrl } = await import('/src/utils/imageUrl.ts')
+    return [
+      protocolUrl('remote', 'https://images.test/封面%20一.png?token=a%2Fb'),
+      toDisplayUrl('jmimg://photo/123456/第 1 页.webp'),
+      toDisplayUrl('', '/Users/reader/漫画/100%20/第 1 页.png')
+    ]
+  })
+  const targets = [
+    'remote/https://images.test/封面%20一.png?token=a%2Fb',
+    'photo/123456/第 1 页.webp',
+    'local//Users/reader/漫画/100%20/第 1 页.png'
+  ]
+  expect(urls).toEqual(targets.map((target) => 'jmimg://localhost/' + encodeURIComponent(target)))
 })
 
 for (const loggedIn of [true, false]) {
@@ -491,7 +610,7 @@ for (const loggedIn of [true, false]) {
 
 test('broken avatars fall back and retry when the profile image changes', async ({ page }) => {
   await fixture(page)
-  await page.route('http://jmimg.localhost/remote/http%3A%2F%2Fjm.test%2Favatar', (route) =>
+  await page.route('http://jmimg.localhost/remote%2Fhttp%3A%2F%2Fjm.test%2Favatar', (route) =>
     route.abort()
   )
   await page.goto('/settings')

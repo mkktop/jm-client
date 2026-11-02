@@ -88,25 +88,6 @@ pub struct DownloadStateSets {
     pub local: Vec<String>,
 }
 
-#[tauri::command]
-pub async fn check_for_updates(
-    app: tauri::AppHandle,
-    state: State<'_, AppState>,
-) -> Result<crate::updates::UpdateCheck, String> {
-    let version = app.package_info().version.to_string();
-    let proxy = state.client.get_proxy().await;
-    crate::updates::check(&version, proxy.as_deref()).await
-}
-
-#[tauri::command]
-pub async fn open_update_download(app: tauri::AppHandle) -> Result<(), String> {
-    use tauri_plugin_opener::OpenerExt;
-
-    app.opener()
-        .open_url(crate::updates::RELEASES_URL, None::<&str>)
-        .map_err(|_| "无法打开浏览器，请稍后重试。".to_string())
-}
-
 async fn clear_persisted_session(state: &AppState) {
     state.client.clear_session().await;
     let _ = state.db.set_setting("jm_avs", "").await;

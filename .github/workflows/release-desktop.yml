@@ -1,0 +1,108 @@
+name: Release desktop installers
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing stable release tag to build
+        required: true
+        type: string
+        default: v0.1.2
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+  CARGO_INCREMENTAL: '0'
+
+jobs:
+  build:
+    name: Build ${{ matrix.platform }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            platform: windows-x64
+            target: x86_64-pc-windows-msvc
+            bundles: nsis,msi
+          - os: macos-15
+            platform: macos-arm64
+            target: aarch64-apple-darwin
+            bundles: dmg
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+      - name: Validate release version
+        run: node scripts/check-release-version.mjs
+      - run: npm ci
+      - name: Test native update and image handling
+        run: cargo test --release --locked --target ${{ matrix.target }} --manifest-path src-tauri/Cargo.toml --lib
+      - name: Build installer
+        run: npm run tauri -- build --target ${{ matrix.target }} --bundles ${{ matrix.bundles }} --ci
+      - name: Verify Apple Silicon DMG and launch the application
+        if: runner.os == 'macOS'
+        run: python3 scripts/verify-macos.py
+      - name: Stage verified installers and source manifest
+        run: node scripts/release-artifacts.mjs stage ${{ matrix.platform }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.platform }}-installer
+          path: artifacts/installers/${{ matrix.platform }}/
+          if-no-files-found: error
+
+  publish:
+    name: Publish Windows and Mac release
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: '*-installer'
+          path: installers
+      - name: Verify all installer formats, checksums and source provenance
+        run: |
+          node scripts/check-release-version.mjs
+          node scripts/release-artifacts.mjs assemble
+      - name: Publish the complete release
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft > existing-release.txt 2>/dev/null; then
+            [[ $(cat existing-release.txt) == true ]] || { echo 'This version is already published'; exit 1; }
+            gh release upload "$RELEASE_TAG" release/* --clobber
+          else
+            gh release create "$RELEASE_TAG" release/* --verify-tag --draft --title "JM Client $RELEASE_TAG" --notes-file .github/release-notes.md
+          fi
+          count=$(gh release view "$RELEASE_TAG" --json assets --jq '.assets | length')
+          [[ "$count" -eq 4 ]] || { echo 'Release assets are incomplete'; exit 1; }
+          gh release edit "$RELEASE_TAG" --draft=false --latest

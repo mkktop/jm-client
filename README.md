@@ -24,13 +24,18 @@ JM Client 基于 **Tauri 2 + Vue 3 + TypeScript + Rust + SQLite**，UI 与技术
 | 下载 | JPEG（默认）/ PNG / WebP，并发/间隔可调，暂停/恢复/取消，失败重试 |
 | 本地书库 | 已下载漫画、章节、图片数、占用空间、磁盘清理、记录导入导出 |
 | 设置 | API 线路与动态域名、图床/图源、代理、封面缓存、下载参数 |
-| 版本更新 | 设置页底部手动检查 GitHub 正式发布版本，查看更新说明并打开新版下载页 |
+| 版本更新 | 设置页底部检查正式版本、应用内下载与进度、SHA-256 校验、退出并安装；支持 Windows 与 Mac M 系列 |
 
 游客可浏览、搜索、阅读和下载；收藏、评论、点赞、签到、观看历史需要 JM 账号。
 
 ## 下载与安装
 
-在 [最新发布版本](https://github.com/mkktop/jm-client/releases/latest) 下载 Windows x64 安装包。推荐使用 `*-setup.exe`，也可选择 `.msi`。升级前关闭客户端，再运行新版安装包。
+在 [最新发布版本](https://github.com/mkktop/jm-client/releases/latest) 下载对应系统的安装包：
+
+- Windows 10 / 11 x64：推荐 `*-setup.exe`，也可选择 `.msi`。
+- Mac M 系列（Apple Silicon，macOS 11+）：下载 `*_aarch64.dmg`，打开后将 JM Client 拖入 Applications。Mac 版采用本地签名，未进行 Apple 公证；首次打开若被系统拦截，可在“系统设置 → 隐私与安全性”中允许打开。
+
+已安装客户端可在设置页最下方检查更新。下载通过校验后，Windows 点击“退出并安装”；Mac 点击“退出并打开安装包”，再拖入 Applications 替换旧版。请先等待漫画下载完成，账号、书库和设置会保留。
 
 ## 技术栈
 
@@ -85,9 +90,11 @@ npm run tauri build              # 构建安装包
 
 ## 发布客户端更新
 
-发布前同步修改 `package.json`（及 lockfile）、`src-tauri/Cargo.toml`（及 lockfile）与 `src-tauri/tauri.conf.json` 的版本号，并更新 `.github/release-notes.md`。推送对应标签（例如 `v0.2.0`）后，GitHub Actions 会在 Windows 上构建 x64 的 EXE / MSI 安装包，生成 SHA-256 校验文件，确认上传完整后发布正式 Release。
+发布前同步修改 `package.json`（及 lockfile）、`src-tauri/Cargo.toml`（及 lockfile）与 `src-tauri/tauri.conf.json` 的版本号，并更新 `.github/release-notes.md`。推送对应标签（例如 `v0.2.0`），或在 Actions 中手动运行“Release desktop installers”并填写标签。
 
-设置页底部的“版本与更新”通过 GitHub Releases 检查最新正式版本，沿用已保存的代理设置；草稿和预发布版本不会提示升级。没有正式发布时显示“暂未发布正式版本”。发现新版后可打开发布页下载对应系统的安装包，关闭客户端后安装完成升级。
+发布任务分别在 Windows x64 与 Mac ARM64 上执行原生测试和构建。Mac 安装包还会挂载检查、验证 arm64 架构与本地签名，并执行实际启动检查。两个平台均通过后，发布任务核对安装包与标签的源码、版本、格式和 SHA-256，生成校验清单，并将完整的 EXE / MSI / DMG 一起发布。
+
+设置页底部的“软件更新”与 `pika_client` 使用相同的流程：从 GitHub Releases 检查最新正式版本，沿用已保存的代理设置，应用内下载对应架构的安装包并显示进度。下载完成和启动安装前均校验 SHA-256；没有适配当前系统且可校验的安装包时保留手动下载入口。草稿和预发布不会提示升级，没有正式发布时显示“暂未发布正式版本”。
 
 ## 数据目录
 

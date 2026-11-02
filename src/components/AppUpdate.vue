@@ -1,126 +1,153 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
-import { getVersion } from '@tauri-apps/api/app'
-import { invoke, isTauri } from '@tauri-apps/api/core'
+import { computed, onMounted } from 'vue'
 import AppIcon from './AppIcon.vue'
+import { useUpdateStore } from '../stores/updates'
 
-interface UpdateCheck {
-  status: 'available' | 'latest' | 'unpublished'
-  currentVersion: string
-  latestVersion: string | null
-  releaseNotes: string | null
-  publishedAt: string | null
-}
-
-defineProps<{ currentVersion: string }>()
-const emit = defineEmits<{ version: [version: string] }>()
-const desktop = isTauri()
-const checking = ref(false)
-const opening = ref(false)
-const result = ref<UpdateCheck | null>(null)
-const error = ref('')
-const downloadMessage = ref('')
-const statusMessage = computed(() => {
-  if (result.value?.status === 'available') return `发现新版本 v${result.value.latestVersion}`
-  if (result.value?.status === 'latest') return '当前已是最新版本'
-  if (result.value?.status === 'unpublished') return '项目暂未发布正式版本，请稍后再检查。'
-  return ''
-})
+const updates = useUpdateStore()
+const macInstaller = computed(() => updates.result?.installer_kind === 'macos')
+onMounted(() => updates.loadVersion())
 const publishedDate = computed(() => {
-  if (!result.value?.publishedAt) return ''
-  const date = new Date(result.value.publishedAt)
+  const date = new Date(updates.result?.published_at || '')
   return Number.isNaN(date.getTime()) ? '' : date.toLocaleDateString('zh-CN')
 })
-
-onMounted(async () => {
-  if (!desktop) return
-  try {
-    emit('version', await getVersion())
-  } catch {
-    // 手动检查仍可从后端获取实际版本。
-  }
-})
-
-async function checkUpdates() {
-  if (checking.value || opening.value || !desktop) return
-  checking.value = true
-  result.value = null
-  error.value = ''
-  downloadMessage.value = ''
-  try {
-    result.value = await invoke<UpdateCheck>('check_for_updates')
-    emit('version', result.value.currentVersion)
-  } catch (cause) {
-    error.value = '检查失败：' + String(cause)
-  } finally {
-    checking.value = false
-  }
-}
-
-async function downloadUpdate() {
-  if (opening.value || checking.value || result.value?.status !== 'available') return
-  opening.value = true
-  error.value = ''
-  downloadMessage.value = ''
-  try {
-    await invoke('open_update_download')
-    downloadMessage.value = '已在浏览器打开新版下载页，下载后关闭客户端并运行安装包完成升级。'
-  } catch (cause) {
-    error.value = '打开下载页失败：' + String(cause)
-  } finally {
-    opening.value = false
-  }
+function megabytes(bytes: number) {
+  return (bytes / 1024 / 1024).toFixed(1) + ' MB'
 }
 </script>
 
 <template>
   <section
-    class="setting-group app-update"
-    aria-labelledby="app-update-title"
-    :aria-busy="checking"
+    class="setting-group app-updates"
+    aria-labelledby="updates-title"
+    :aria-busy="updates.busy"
   >
     <div class="setting-title">
       <AppIcon name="refresh" />
       <div>
-        <h2 id="app-update-title">版本与更新</h2>
-        <p>检查 JM Client 的最新正式版本</p>
+        <h2 id="updates-title">软件更新</h2>
+        <p>检查并安装 JM Client 的最新正式版本</p>
       </div>
     </div>
     <div class="setting-row">
       <div>
-        <strong>当前版本</strong>
-        <p>{{ currentVersion ? 'v' + currentVersion : '未知' }}</p>
+        <strong
+          >当前版本 {{ updates.currentVersion ? 'v' + updates.currentVersion : '读取中…' }}</strong
+        >
+        <p>检查与下载使用「网络连接」中的代理设置。</p>
       </div>
-      <button
-        class="btn btn-secondary btn-sm"
-        :disabled="checking || opening || !desktop"
-        @click="checkUpdates"
-      >
-        <span v-if="checking" class="spinner" />{{ checking ? '正在检查…' : '检查更新' }}
+      <button class="btn btn-secondary btn-sm" :disabled="updates.busy" @click="updates.check">
+        <AppIcon name="refresh" :size="14" />
+        {{ updates.phase === 'checking' ? '检查中…' : '检查更新' }}
       </button>
     </div>
-    <p v-if="!desktop" class="hint">请在桌面客户端中检查更新。</p>
-    <div
-      v-if="statusMessage || error || downloadMessage"
-      class="update-feedback"
-      aria-live="polite"
-    >
-      <p v-if="statusMessage" class="setting-message" role="status">{{ statusMessage }}</p>
-      <p v-if="error" class="setting-message error" role="alert">{{ error }}</p>
-      <p v-if="downloadMessage" class="setting-message" role="status">{{ downloadMessage }}</p>
-    </div>
-    <div v-if="result?.status === 'available'" class="update-release">
+    <p v-if="updates.message" role="status" class="setting-message update-message">
+      {{ updates.message }}
+    </p>
+    <div v-if="updates.result?.status === 'available'" class="update-details">
       <p v-if="publishedDate" class="hint">发布时间：{{ publishedDate }}</p>
-      <div v-if="result.releaseNotes" class="update-notes">
-        <h3>更新说明</h3>
-        <p>{{ result.releaseNotes }}</p>
+      <details v-if="updates.result.notes" class="update-notes">
+        <summary>更新说明</summary>
+        <p>{{ updates.result.notes }}</p>
+      </details>
+      <div v-if="updates.phase === 'downloading'" class="update-progress">
+        <progress :value="updates.downloaded" :max="updates.total || 1" aria-label="更新下载进度" />
+        <span role="status">
+          {{ updates.percent }}% · {{ megabytes(updates.downloaded) }} /
+          {{ megabytes(updates.total) }}
+        </span>
       </div>
       <div class="setting-actions">
-        <button class="btn btn-primary btn-sm" :disabled="opening" @click="downloadUpdate">
-          <AppIcon name="download" :size="14" />{{ opening ? '正在打开…' : '下载新版本' }}
+        <button
+          v-if="updates.result.can_install && !['ready', 'installing'].includes(updates.phase)"
+          class="btn btn-primary btn-sm"
+          :disabled="updates.busy"
+          @click="updates.download"
+        >
+          <AppIcon name="download" :size="14" />
+          {{ updates.phase === 'downloading' ? '下载中…' : '下载更新' }}
+          <span v-if="updates.result.download_size"
+            >({{ megabytes(updates.result.download_size) }})</span
+          >
+        </button>
+        <button
+          v-if="['ready', 'installing'].includes(updates.phase)"
+          class="btn btn-primary btn-sm"
+          :disabled="updates.busy"
+          @click="updates.install"
+        >
+          {{
+            updates.phase === 'installing'
+              ? macInstaller
+                ? '正在打开安装包…'
+                : '正在启动安装程序…'
+              : macInstaller
+                ? '退出并打开安装包'
+                : '退出并安装'
+          }}
+        </button>
+        <button
+          class="btn btn-secondary btn-sm"
+          :disabled="updates.busy"
+          @click="updates.openRelease"
+        >
+          前往发布页
         </button>
       </div>
-      <p class="hint">在发布页选择适合系统的安装包，下载后关闭客户端并安装新版本。</p>
+      <p v-if="!updates.result.can_install" class="hint">
+        此版本没有适配当前系统且可校验的安装包，请前往发布页手动下载更新。
+      </p>
+      <p v-else-if="macInstaller" class="hint">
+        请先等待漫画下载完成。打开安装包前会退出客户端；将 JM Client 拖入 Applications
+        文件夹并替换旧版，书库、账号和设置会保留。
+      </p>
+      <p v-else class="hint">
+        安装会退出客户端并打开安装向导，请先等待漫画下载完成。书库、账号和设置会保留。
+      </p>
     </div>
+    <p v-if="updates.error" role="alert" class="setting-message error update-message">
+      {{ updates.error }}
+    </p>
   </section>
 </template>
+
+<style scoped>
+.update-message {
+  margin-top: 16px;
+  line-height: 1.8;
+}
+.update-details {
+  margin-top: 12px;
+}
+.update-notes {
+  margin-top: 12px;
+  font-size: 11px;
+  line-height: 1.8;
+  color: var(--text-secondary);
+}
+.update-notes summary {
+  cursor: pointer;
+  color: var(--text-primary);
+}
+.update-notes p {
+  margin-top: 10px;
+  max-height: 240px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.update-progress {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin-top: 16px;
+  font-size: 10px;
+  color: var(--text-secondary);
+}
+.update-progress progress {
+  flex: 1;
+  min-width: 120px;
+  height: 8px;
+  accent-color: var(--success);
+}
+</style>

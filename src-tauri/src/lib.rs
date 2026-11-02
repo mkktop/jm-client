@@ -2,12 +2,16 @@ mod api;
 mod commands;
 mod db;
 mod download;
+mod image_protocol;
 mod updates;
 
 use commands::*;
 use std::sync::Arc;
 use tauri::Manager;
 use tokio::sync::RwLock;
+use updates::{
+    check_for_updates, download_update, get_app_version, install_update, open_update_release,
+};
 
 /// jmimg:// 自定义协议：封面/头像/章节图统一走 Rust 侧。
 /// - jmimg://remote/<编码后的远程URL>：封面/头像，缓存于 app_cache_dir/imgcache。
@@ -49,28 +53,10 @@ fn handle_jmimg(
 
     let uri = request.uri().to_string();
     log::debug!("jmimg request: {uri}");
-    let rest = uri
-        .strip_prefix("http://jmimg.localhost/")
-        .or_else(|| uri.strip_prefix("https://jmimg.localhost/"))
-        .or_else(|| uri.strip_prefix("jmimg://localhost/"))
-        .or_else(|| uri.strip_prefix("jmimg://"))
-        .map(|value| value.to_string());
-    let Some(rest) = rest else {
-        log::warn!("jmimg rejected unexpected uri shape: {uri}");
-        responder.respond(respond(400, "text/plain", b"bad scheme".to_vec()));
-        return;
-    };
-    let (kind, encoded) = match rest.split_once('/') {
-        Some((kind, value)) => (kind.to_ascii_lowercase(), value.trim_start_matches('/')),
-        None => {
-            responder.respond(respond(400, "text/plain", b"bad request".to_vec()));
-            return;
-        }
-    };
-    let decoded = match urlencoding::decode(encoded) {
-        Ok(value) => value.into_owned(),
-        Err(_) => {
-            responder.respond(respond(400, "text/plain", b"bad encoding".to_vec()));
+    let (kind, decoded) = match image_protocol::parse_image_uri(&uri) {
+        Ok(route) => route,
+        Err(error) => {
+            responder.respond(respond(400, "text/plain", error.as_bytes().to_vec()));
             return;
         }
     };
@@ -335,6 +321,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        .manage(updates::UpdateManager::default())
         .register_asynchronous_uri_scheme_protocol("jmimg", |ctx, request, responder| {
             handle_jmimg(ctx.app_handle().clone(), request, responder)
         })
@@ -472,7 +459,10 @@ pub fn run() {
             is_logged_in,
             get_my_profile,
             check_for_updates,
-            open_update_download,
+            get_app_version,
+            download_update,
+            install_update,
+            open_update_release,
             search_comics,
             get_categories,
             get_category_comics,

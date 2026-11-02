@@ -609,6 +609,14 @@ impl Database {
         Ok(result.rows_affected() as usize)
     }
 
+    pub async fn has_active_downloads(&self) -> Result<bool, sqlx::Error> {
+        sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS(SELECT 1 FROM download_queue WHERE status IN ('pending', 'downloading'))",
+        )
+        .fetch_one(&self.pool)
+        .await
+    }
+
     pub async fn get_all_downloads(&self, limit: i64) -> Result<Vec<DownloadTask>, sqlx::Error> {
         let rows = sqlx::query("SELECT * FROM download_queue ORDER BY created_at DESC LIMIT ?")
             .bind(limit)
@@ -779,5 +787,25 @@ fn row_to_task(row: sqlx::sqlite::SqliteRow) -> DownloadTask {
         downloaded_images: row.get("downloaded_images"),
         save_path: row.get::<Option<String>, _>("save_path").unwrap_or_default(),
         created_at: row.get("created_at"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn updater_blocks_only_running_or_queued_comic_downloads() {
+        let path = std::env::temp_dir().join(format!("jm-update-guard-{}.sqlite", uuid::Uuid::new_v4()));
+        let db = Database::new(path.to_str().unwrap()).await.unwrap();
+        assert!(!db.has_active_downloads().await.unwrap());
+        sqlx::query("INSERT INTO download_queue (id, comic_id, comic_title, chapter_id, episode_order, episode_title, status) VALUES ('test', 'comic', '漫画', 'chapter', 1, '章节', 'pending')")
+            .execute(&db.pool).await.unwrap();
+        for status in ["pending", "downloading", "paused", "completed", "failed", "cancelled"] {
+            db.set_download_status("test", status, None).await.unwrap();
+            assert_eq!(db.has_active_downloads().await.unwrap(), matches!(status, "pending" | "downloading"), "{status}");
+        }
+        db.pool.close().await;
+        std::fs::remove_file(path).unwrap();
     }
 }
