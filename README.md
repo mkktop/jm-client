@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="src/assets/jm-brand.svg" width="96" height="96" alt="JM Client 图标" />
+  <img src="src/assets/jm-brand.png" width="96" height="96" alt="JM Client 图标" />
   <h1>JM Client</h1>
   <p><strong>禁漫天堂桌面客户端</strong></p>
   <p>发现 · 分类 · 排行 · 周刊 · 收藏 · 阅读 · 下载</p>
@@ -67,6 +67,8 @@ cargo test --manifest-path src-tauri/Cargo.toml --lib
 npm run test:ui                  # Playwright 界面测试
 npm run tauri build              # 构建安装包
 ```
+
+应用图标采用“猫咪看漫画”设计，源图为 `src/assets/jm-desktop.png`。更换源图后运行 `npm run icons`，即可统一生成桌面与移动端图标，并同步应用内标识和网页 favicon。
 
 ## 使用说明
 
