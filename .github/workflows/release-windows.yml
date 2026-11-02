@@ -8,6 +8,10 @@ on:
         required: true
         type: string
         default: v0.1.1
+      checksums_only:
+        description: Verify an existing release and regenerate its checksum file
+        type: boolean
+        default: false
   push:
     tags:
       - 'v*'
@@ -16,11 +20,12 @@ permissions:
   contents: write
 
 concurrency:
-  group: release-${{ inputs.tag || github.ref }}
+  group: release-${{ inputs.tag || github.ref_name }}
   cancel-in-progress: false
 
 jobs:
   release:
+    if: ${{ !inputs.checksums_only }}
     runs-on: windows-latest
     timeout-minutes: 45
     env:
@@ -79,7 +84,8 @@ jobs:
           }
           foreach ($file in ($exe + $msi)) {
             if ($file.Length -lt 1MB) { throw "Installer is unexpectedly small: $($file.Name)" }
-            Copy-Item $file.FullName release/
+            $assetName = $file.Name -replace ' ', '.'
+            Copy-Item $file.FullName (Join-Path release $assetName)
           }
           Get-ChildItem release/ -File | Where-Object { $_.Extension -in '.exe', '.msi' } | ForEach-Object {
             $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower()
@@ -105,3 +111,28 @@ jobs:
           if ($LASTEXITCODE -ne 0 -or $publishedAssets -ne 3) { throw "Release assets are incomplete." }
           gh release edit $env:RELEASE_TAG --draft=false --latest
           if ($LASTEXITCODE -ne 0) { throw "Failed to publish release." }
+
+  verify-release:
+    if: ${{ inputs.checksums_only }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: ${{ inputs.tag }}
+    steps:
+      - name: Verify published installers and refresh checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || exit 1
+          mkdir release
+          gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --dir release --pattern '*.exe' --pattern '*.msi'
+          installers=(release/*.exe release/*.msi)
+          [[ ${#installers[@]} -eq 2 ]] || exit 1
+          for installer in "${installers[@]}"; do
+            [[ -f "$installer" && $(stat -c%s "$installer") -gt 1048576 ]] || exit 1
+          done
+          (cd release && sha256sum -- *.exe *.msi > SHA256SUMS.txt)
+          gh release upload "$RELEASE_TAG" release/SHA256SUMS.txt --repo "$GITHUB_REPOSITORY" --clobber
+          count=$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets | length')
+          [[ "$count" -eq 3 ]] || exit 1
