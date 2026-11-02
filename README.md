@@ -24,8 +24,13 @@ JM Client 基于 **Tauri 2 + Vue 3 + TypeScript + Rust + SQLite**，UI 与技术
 | 下载 | JPEG（默认）/ PNG / WebP，并发/间隔可调，暂停/恢复/取消，失败重试 |
 | 本地书库 | 已下载漫画、章节、图片数、占用空间、磁盘清理、记录导入导出 |
 | 设置 | API 线路与动态域名、图床/图源、代理、封面缓存、下载参数 |
+| 版本更新 | 设置页底部手动检查 GitHub 正式发布版本，查看更新说明并打开新版下载页 |
 
 游客可浏览、搜索、阅读和下载；收藏、评论、点赞、签到、观看历史需要 JM 账号。
+
+## 下载与安装
+
+在 [最新发布版本](https://github.com/mkktop/jm-client/releases/latest) 下载 Windows x64 安装包。推荐使用 `*-setup.exe`，也可选择 `.msi`。升级前关闭客户端，再运行新版安装包。
 
 ## 技术栈
 
@@ -77,6 +82,12 @@ npm run tauri build              # 构建安装包
 3. 在“接口与图源”里选择 API 线路；切换线路后如已登录，需要重新登录。
 4. 登录后可使用收藏、评论、点赞、签到和观看历史。
 5. 在章节列表点击下载；下载管理页支持暂停、恢复、取消。
+
+## 发布客户端更新
+
+发布前同步修改 `package.json`（及 lockfile）、`src-tauri/Cargo.toml`（及 lockfile）与 `src-tauri/tauri.conf.json` 的版本号，并更新 `.github/release-notes.md`。推送对应标签（例如 `v0.2.0`）后，GitHub Actions 会在 Windows 上构建 x64 的 EXE / MSI 安装包，生成 SHA-256 校验文件，确认上传完整后发布正式 Release。
+
+设置页底部的“版本与更新”通过 GitHub Releases 检查最新正式版本，沿用已保存的代理设置；草稿和预发布版本不会提示升级。没有正式发布时显示“暂未发布正式版本”。发现新版后可打开发布页下载对应系统的安装包，关闭客户端后安装完成升级。
 
 ## 数据目录
 

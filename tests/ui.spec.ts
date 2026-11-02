@@ -50,6 +50,7 @@ async function fixture(page: Page, loggedIn = true) {
       const profile = {
         _id: 'u1',
         name: '测试读者',
+        avatar: { path: 'http://jm.test/avatar', fileServer: '' },
         level: 12,
         levelName: '正式会员',
         exp: 1200,
@@ -62,6 +63,15 @@ async function fixture(page: Page, loggedIn = true) {
       const state = window as any
       state.__calls = []
       state.__fail = ''
+      state.__profile = profile
+      state.__updateDelay = 0
+      state.__updateResult = {
+        status: 'latest',
+        currentVersion: '0.1.0',
+        latestVersion: '0.1.0',
+        releaseNotes: null,
+        publishedAt: null
+      }
       state.isTauri = true
       state.__windowState = { maximized: false, minimized: false, closed: false }
       state.__TAURI_INTERNALS__ = {
@@ -70,6 +80,15 @@ async function fixture(page: Page, loggedIn = true) {
           state.__calls.push({ cmd, args })
           if (state.__fail === cmd) throw '连接暂时不可用，请稍后重试'
           switch (cmd) {
+            case 'plugin:app|version':
+              return '0.1.0'
+            case 'check_for_updates':
+              if (state.__updateDelay) {
+                await new Promise((resolve) => setTimeout(resolve, state.__updateDelay))
+              }
+              return state.__updateResult
+            case 'open_update_download':
+              return null
             case 'plugin:window|is_maximized':
               return state.__windowState.maximized
             case 'plugin:window|toggle_maximize':
@@ -92,7 +111,7 @@ async function fixture(page: Page, loggedIn = true) {
             case 'logout':
               return null
             case 'get_my_profile':
-              return profile
+              return structuredClone(state.__profile)
             case 'get_daily':
               return {
                 dailyId: '74',
@@ -349,4 +368,144 @@ test('weekly issues split issue number and date range', async ({ page }) => {
   await expect(page.locator('.category-aliases')).toContainText('2026 年')
   await expect(page.locator('.segmented')).toContainText('日漫')
   await expect(page.locator('.comic-grid .comic-card').first()).toBeVisible()
+})
+
+test('update check is last in settings and distinguishes latest from unpublished', async ({
+  page
+}) => {
+  await fixture(page)
+  await page.goto('/settings')
+  const updates = page.getByRole('region', { name: '版本与更新' })
+  await expect(page.locator('.settings-form > .setting-group').last()).toContainText('版本与更新')
+  await expect(updates.getByText('v0.1.0', { exact: true })).toBeVisible()
+  expect((await calls(page)).some((call) => call.cmd === 'check_for_updates')).toBe(false)
+  await updates.getByRole('button', { name: '检查更新', exact: true }).click()
+  await expect(updates.getByRole('status')).toHaveText('当前已是最新版本')
+  await expect(updates.getByRole('button', { name: '下载新版本' })).toHaveCount(0)
+
+  await page.evaluate(() => {
+    const state = window as any
+    state.__updateResult = {
+      ...state.__updateResult,
+      status: 'unpublished',
+      latestVersion: null
+    }
+  })
+  await updates.getByRole('button', { name: '检查更新', exact: true }).click()
+  await expect(updates.getByRole('status')).toContainText('暂未发布正式版本')
+  await expect(updates.getByText('当前已是最新版本')).toHaveCount(0)
+})
+
+test('new releases show notes and open downloads only when requested', async ({ page }) => {
+  await fixture(page)
+  await page.goto('/settings')
+  await page.evaluate(() => {
+    const state = window as any
+    state.__updateDelay = 500
+    state.__updateResult = {
+      status: 'available',
+      currentVersion: '0.1.0',
+      latestVersion: '0.2.0',
+      releaseNotes: '新增功能\n修复小窗口头像显示问题',
+      publishedAt: '2026-11-02T00:00:00Z'
+    }
+  })
+  const updates = page.getByRole('region', { name: '版本与更新' })
+  await updates.getByRole('button', { name: '检查更新', exact: true }).click()
+  await expect(updates.getByRole('button', { name: '正在检查…' })).toBeDisabled()
+  await expect(updates.getByRole('status')).toHaveText('发现新版本 v0.2.0')
+  await expect(updates.locator('.update-notes')).toContainText('修复小窗口头像显示问题')
+  expect((await calls(page)).filter((call) => call.cmd === 'check_for_updates')).toHaveLength(1)
+  expect((await calls(page)).some((call) => call.cmd === 'open_update_download')).toBe(false)
+  await page.evaluate(() => ((window as any).__fail = 'open_update_download'))
+  await updates.getByRole('button', { name: '下载新版本' }).click()
+  await expect(updates.getByRole('alert')).toContainText('打开下载页失败')
+  await page.evaluate(() => ((window as any).__fail = ''))
+  await updates.getByRole('button', { name: '下载新版本' }).click()
+  await expect(updates.getByRole('alert')).toHaveCount(0)
+  await expect(updates.getByText(/已在浏览器打开新版下载页/)).toBeVisible()
+})
+
+test('failed update checks can retry without leaving stale download actions', async ({ page }) => {
+  await fixture(page)
+  await page.goto('/settings')
+  const updates = page.getByRole('region', { name: '版本与更新' })
+  await page.evaluate(() => {
+    const state = window as any
+    state.__updateResult.status = 'available'
+    state.__updateResult.latestVersion = '0.2.0'
+  })
+  await updates.getByRole('button', { name: '检查更新', exact: true }).click()
+  await expect(updates.getByRole('button', { name: '下载新版本' })).toBeVisible()
+  await page.evaluate(() => ((window as any).__fail = 'check_for_updates'))
+  await updates.getByRole('button', { name: '检查更新', exact: true }).click()
+  await expect(updates.getByRole('alert')).toContainText('检查失败')
+  await expect(updates.getByRole('button', { name: '下载新版本' })).toHaveCount(0)
+  await expect(updates.getByRole('button', { name: '检查更新', exact: true })).toBeEnabled()
+  await page.evaluate(() => {
+    const state = window as any
+    state.__fail = ''
+    state.__updateResult.status = 'latest'
+    state.__updateResult.latestVersion = '0.1.0'
+  })
+  await updates.getByRole('button', { name: '检查更新', exact: true }).click()
+  await expect(updates.getByRole('status')).toHaveText('当前已是最新版本')
+  await expect(updates.getByRole('alert')).toHaveCount(0)
+})
+
+for (const loggedIn of [true, false]) {
+  test(`account stays visible while resizing with ${loggedIn ? 'a signed-in user' : 'a guest'}`, async ({
+    page
+  }) => {
+    await fixture(page, loggedIn)
+    await page.goto('/settings')
+    if (!loggedIn) await page.getByText('以游客身份浏览').click()
+    for (const collapsed of [false, true]) {
+      if (collapsed) await page.getByRole('button', { name: '收起导航' }).click()
+      for (const [width, height] of [
+        [1280, 820],
+        [1280, 761],
+        [1280, 760],
+        [960, 640],
+        [1100, 800],
+        [1920, 1080],
+        [760, 640]
+      ]) {
+        await page.setViewportSize({ width, height })
+        await expect(page.locator('.sidebar-profile')).toBeInViewport({ ratio: 1 })
+        await expect(page.locator('.sidebar-profile .avatar')).toBeInViewport({ ratio: 1 })
+        await page
+          .locator('.sidebar-navigation')
+          .evaluate((node) => (node.scrollTop = node.scrollHeight))
+        await expect(page.locator('.sidebar-navigation [title="下载管理"]')).toBeInViewport({
+          ratio: 1
+        })
+      }
+    }
+    if (!loggedIn) {
+      await page.locator('.sidebar-profile').click()
+      await expect(page.getByRole('button', { name: '登录 JM', exact: true })).toBeVisible()
+    }
+  })
+}
+
+test('broken avatars fall back and retry when the profile image changes', async ({ page }) => {
+  await fixture(page)
+  await page.route('http://jmimg.localhost/remote/http%3A%2F%2Fjm.test%2Favatar', (route) =>
+    route.abort()
+  )
+  await page.goto('/settings')
+  await expect(page.locator('.sidebar-profile [aria-label="默认头像"]')).toBeVisible()
+  await expect(page.locator('.sidebar-profile img.avatar')).toHaveCount(0)
+  await page.evaluate(() => {
+    ;(window as any).__profile.avatar.path = 'http://jm.test/avatar-new'
+  })
+  await page.locator('.punch-btn').click()
+  await expect(page.locator('.sidebar-profile img.avatar')).toBeVisible()
+  await expect(page.locator('.sidebar-profile img.avatar')).toHaveJSProperty('complete', true)
+  expect(
+    await page
+      .locator('.sidebar-profile img.avatar')
+      .evaluate((img: HTMLImageElement) => img.naturalWidth)
+  ).toBeGreaterThan(0)
 })

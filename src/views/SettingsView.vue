@@ -5,8 +5,10 @@ import { useAppStore } from '../stores/app'
 import { useComicStore, type BlockedTagScope } from '../stores/comic'
 import AppIcon from '../components/AppIcon.vue'
 import BrandMark from '../components/BrandMark.vue'
+import AppUpdate from '../components/AppUpdate.vue'
 const app = useAppStore()
 const comic = useComicStore()
+const currentVersion = ref('')
 const blockInput = ref('')
 function addBlocked() {
   const value = blockInput.value.trim()
@@ -146,9 +148,7 @@ async function exportHistory() {
   messages.value.history = ''
   try {
     const path = await invoke<string | null>('export_download_history')
-    messages.value.history = path
-      ? '已导出到 ' + path
-      : '已取消导出'
+    messages.value.history = path ? '已导出到 ' + path : '已取消导出'
   } catch (e) {
     messages.value.history = '导出失败：' + e
   } finally {
@@ -314,8 +314,7 @@ async function save(kind: string) {
               role="status"
               class="setting-message"
               :class="{
-                error:
-                  messages.domain?.includes('失败') || messages.imghost?.includes('失败')
+                error: messages.domain?.includes('失败') || messages.imghost?.includes('失败')
               }"
               >{{ messages.domain || messages.imghost }}</span
             >
@@ -667,12 +666,17 @@ async function save(kind: string) {
             <button v-else class="btn btn-primary btn-sm" @click="app.logout()">去登录</button>
           </div>
         </section>
+        <AppUpdate :current-version="currentVersion" @version="currentVersion = $event" />
       </div>
       <aside class="settings-aside">
         <BrandMark />
         <h3>JM DESKTOP</h3>
-        <p>专注看本的桌面客户端。支持发现、分类、排行榜、每周必看、账号收藏、章节下载和阅读进度记忆。</p>
-        <small>JM DESKTOP · v0.1.0</small>
+        <p>
+          专注看本的桌面客户端。支持发现、分类、排行榜、每周必看、账号收藏、章节下载和阅读进度记忆。
+        </p>
+        <small
+          >JM DESKTOP<template v-if="currentVersion"> · v{{ currentVersion }}</template></small
+        >
       </aside>
     </div>
   </div>

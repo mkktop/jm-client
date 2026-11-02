@@ -2,6 +2,7 @@ mod api;
 mod commands;
 mod db;
 mod download;
+mod updates;
 
 use commands::*;
 use std::sync::Arc;
@@ -333,6 +334,7 @@ fn evict_cache(root: &std::path::Path, used: &std::sync::atomic::AtomicU64, targ
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_opener::init())
         .register_asynchronous_uri_scheme_protocol("jmimg", |ctx, request, responder| {
             handle_jmimg(ctx.app_handle().clone(), request, responder)
         })
@@ -469,6 +471,8 @@ pub fn run() {
             logout,
             is_logged_in,
             get_my_profile,
+            check_for_updates,
+            open_update_download,
             search_comics,
             get_categories,
             get_category_comics,

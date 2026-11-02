@@ -1,11 +1,14 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useAppStore } from '../stores/app'
 import { useComicStore } from '../stores/comic'
 import AppIcon from './AppIcon.vue'
 import BrandMark from './BrandMark.vue'
 const app = useAppStore()
 const comics = useComicStore()
+const avatarUrl = computed(() => comics.getAvatarUrl(comics.profile?.avatar))
+const avatarFailed = ref(false)
+watch(avatarUrl, () => (avatarFailed.value = false))
 const explore = [
   { path: '/', icon: 'compass', label: '发现漫画' },
   { path: '/categories', icon: 'grid', label: '分类浏览' },
@@ -27,8 +30,7 @@ async function punchIn() {
   punchNotice.value = ''
   try {
     const result = await comics.checkin()
-    punchNotice.value =
-      result.message || (result.status === 'ok' ? '签到成功' : '签到已处理')
+    punchNotice.value = result.message || (result.status === 'ok' ? '签到成功' : '签到已处理')
   } catch (e) {
     punchNotice.value = '签到失败：' + e
   } finally {
@@ -36,8 +38,11 @@ async function punchIn() {
     setTimeout(() => (punchNotice.value = ''), 4000)
   }
 }
-async function goLogin() {
-  await app.logout()
+async function handleProfileClick(event: MouseEvent) {
+  if (!app.isLoggedIn) {
+    event.preventDefault()
+    await app.logout()
+  }
 }
 onMounted(() => {
   if (app.isLoggedIn) {
@@ -52,7 +57,7 @@ onMounted(() => {
       <BrandMark />
       <span class="brand-type">jm<span>JM COMICS</span></span>
     </router-link>
-    <div class="sidebar-navigation">
+    <nav class="sidebar-navigation" aria-label="主导航" tabindex="0">
       <div class="nav-group">
         <span class="nav-heading">探索 / EXPLORE</span
         ><router-link
@@ -78,7 +83,7 @@ onMounted(() => {
           ><AppIcon :name="item.icon" /><span>{{ item.label }}</span></router-link
         >
       </div>
-    </div>
+    </nav>
     <div class="sidebar-note">
       <AppIcon name="sparkles" :size="24" />
       <p>收藏好本，随时开看。</p>
@@ -108,23 +113,32 @@ onMounted(() => {
         >
       </button>
     </div>
-    <router-link to="/settings" class="sidebar-profile" title="账号信息"
-      ><img
-        v-if="comics.profile && comics.getAvatarUrl(comics.profile.avatar)"
-        :src="comics.getAvatarUrl(comics.profile.avatar)"
+    <router-link
+      to="/settings"
+      class="sidebar-profile"
+      :title="app.isLoggedIn ? '账号信息' : '登录 JM 账号'"
+      @click="handleProfileClick"
+    >
+      <img
+        v-if="avatarUrl && !avatarFailed"
+        :src="avatarUrl"
         alt="头像"
-        class="avatar" /><span v-else class="avatar"><AppIcon name="user" :size="19" /></span
-      ><span class="profile-info"
-        ><strong>{{ app.isLoggedIn ? comics.profile?.name || '漫画爱好者' : '游客模式' }}</strong
-        ><small>{{
+        class="avatar"
+        @error="avatarFailed = true"
+      />
+      <span v-else class="avatar" aria-label="默认头像"><AppIcon name="user" :size="19" /></span>
+      <span class="profile-info">
+        <strong>{{ app.isLoggedIn ? comics.profile?.name || '漫画爱好者' : '游客模式' }}</strong>
+        <small>{{
           app.isLoggedIn
             ? comics.profile
               ? 'Lv.' + comics.profile.level + ' · ' + comics.profile.coin + ' JCoin'
               : 'JM 账号'
             : '登录后可同步收藏与历史'
-        }}</small></span
-      ><button v-if="!app.isLoggedIn" class="text-btn" @click.prevent.stop="goLogin">登录</button
-      ><AppIcon v-else name="chevron-right" :size="15"
-    /></router-link>
+        }}</small>
+      </span>
+      <span v-if="!app.isLoggedIn" class="text-btn profile-login">登录</span>
+      <AppIcon v-else name="chevron-right" :size="15" />
+    </router-link>
   </aside>
 </template>

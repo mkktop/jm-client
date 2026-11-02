@@ -1,0 +1,99 @@
+name: Release Windows installers
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    env:
+      CARGO_INCREMENTAL: '0'
+    steps:
+      - name: Check out release source
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+
+      - name: Validate release version
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          $expected = $env:RELEASE_TAG -replace '^v', ''
+          $package = Get-Content package.json -Raw | ConvertFrom-Json
+          $config = Get-Content src-tauri/tauri.conf.json -Raw | ConvertFrom-Json
+          $cargo = Get-Content src-tauri/Cargo.toml -Raw
+          $cargoVersion = [regex]::Match($cargo, '(?m)^version = "([^"]+)"').Groups[1].Value
+          if ($package.version -ne $expected -or $config.version -ne $expected -or $cargoVersion -ne $expected) {
+            throw "Release tag and application versions must match."
+          }
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Build Windows installers
+        run: npm run tauri -- build --target x86_64-pc-windows-msvc --bundles nsis,msi --ci
+
+      - name: Verify installers and create checksums
+        shell: pwsh
+        run: |
+          $bundle = 'src-tauri/target/x86_64-pc-windows-msvc/release/bundle'
+          New-Item -ItemType Directory -Path release -Force | Out-Null
+          $exe = @(Get-ChildItem "$bundle/nsis/*.exe")
+          $msi = @(Get-ChildItem "$bundle/msi/*.msi")
+          if ($exe.Count -ne 1 -or $msi.Count -ne 1) {
+            throw "Expected one NSIS installer and one MSI installer."
+          }
+          foreach ($file in ($exe + $msi)) {
+            if ($file.Length -lt 1MB) { throw "Installer is unexpectedly small: $($file.Name)" }
+            Copy-Item $file.FullName release/
+          }
+          Get-ChildItem release/ -File | Where-Object { $_.Extension -in '.exe', '.msi' } | ForEach-Object {
+            $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower()
+            "$hash  $($_.Name)"
+          } | Set-Content release/SHA256SUMS.txt -Encoding utf8
+
+      - name: Preserve release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-installers-${{ github.ref_name }}
+          path: release/*
+          if-no-files-found: error
+
+      - name: Publish verified installers
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          $files = @(Get-ChildItem release/ -File | ForEach-Object { $_.FullName })
+          gh release create $env:RELEASE_TAG @files --verify-tag --draft --title "JM Client $env:RELEASE_TAG" --notes-file .github/release-notes.md
+          if ($LASTEXITCODE -ne 0) { throw "Failed to upload release assets." }
+          $publishedAssets = gh release view $env:RELEASE_TAG --json assets --jq '.assets | length'
+          if ($LASTEXITCODE -ne 0 -or $publishedAssets -ne 3) { throw "Release assets are incomplete." }
+          gh release edit $env:RELEASE_TAG --draft=false --latest
+          if ($LASTEXITCODE -ne 0) { throw "Failed to publish release." }

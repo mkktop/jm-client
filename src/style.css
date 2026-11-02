@@ -229,6 +229,8 @@ kbd {
   z-index: 50;
   display: flex;
   flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
   transition: width 220ms ease;
 }
 .sidebar-brand {
@@ -237,6 +239,7 @@ kbd {
   gap: 12px;
   padding: 30px 26px 39px;
   height: 118px;
+  flex-shrink: 0;
 }
 .brand-type {
   color: #f3f2e8;
@@ -256,6 +259,13 @@ kbd {
 }
 .sidebar-navigation {
   padding: 0 15px;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: #526256 transparent;
 }
 .nav-group {
   margin-bottom: 31px;
@@ -309,6 +319,7 @@ kbd {
   display: block;
 }
 .sidebar-note {
+  flex-shrink: 0;
   border: 1px solid #84977c24;
   border-radius: 12px;
   margin: auto 24px 20px;
@@ -335,6 +346,7 @@ kbd {
 }
 .sidebar-bottom {
   padding: 0 15px 12px;
+  flex-shrink: 0;
 }
 .punch-btn {
   color: #3e7b4f;
@@ -355,6 +367,7 @@ kbd {
   display: flex;
   align-items: center;
   gap: 10px;
+  flex-shrink: 0;
 }
 .avatar {
   width: 34px;
@@ -370,6 +383,7 @@ kbd {
 }
 .profile-info {
   flex: 1;
+  min-width: 0;
   overflow: hidden;
 }
 .profile-info strong {
@@ -398,6 +412,7 @@ kbd {
 .collapsed .nav-item > span,
 .collapsed .sidebar-note,
 .collapsed .profile-info,
+.collapsed .profile-login,
 .collapsed .sidebar-profile > svg {
   display: none;
 }
@@ -946,6 +961,7 @@ select.input {
   .sidebar .nav-item > span,
   .sidebar .sidebar-note,
   .sidebar .profile-info,
+  .sidebar .profile-login,
   .sidebar-profile > svg {
     display: none;
   }
