@@ -507,6 +507,15 @@ kbd {
   border-color: var(--accent);
   color: var(--accent);
 }
+.btn-danger {
+  background: var(--error);
+  color: #fff;
+}
+.btn-danger:hover:not(:disabled) {
+  box-shadow: 0 4px 12px rgba(207, 91, 85, 0.28);
+  transform: translateY(-1px);
+  filter: brightness(0.96);
+}
 .btn-sm {
   min-height: 32px;
   padding: 7px 12px;

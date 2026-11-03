@@ -939,6 +939,27 @@ pub async fn clear_image_cache(
     Ok(freed)
 }
 
+/// 清空本地数据与缓存，并重启应用，回到全新安装状态。
+/// 下载目录中已保存的漫画文件由用户自行管理，不会删除。
+#[tauri::command]
+pub async fn clear_all_data(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    state
+        .db
+        .wipe_all()
+        .await
+        .map_err(|error| format!("清除本地数据失败：{error}"))?;
+    if let Ok(cache_dir) = app.path().app_cache_dir() {
+        // 封面缓存与更新安装包都可再生成，直接清空。
+        let _ = std::fs::remove_dir_all(cache_dir.join("imgcache"));
+        let _ = std::fs::remove_dir_all(cache_dir.join("updates"));
+    }
+    state.image_cache_used.store(0, Ordering::Relaxed);
+    app.restart();
+}
+
 async fn read_download_settings(state: &AppState) -> DownloadSettings {
     let format = state
         .db

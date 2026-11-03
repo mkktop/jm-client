@@ -521,7 +521,8 @@ pub fn run() {
             import_download_history,
             get_image_cache_status,
             set_image_cache_settings,
-            clear_image_cache
+            clear_image_cache,
+            clear_all_data
         ])
         .run(tauri::generate_context!())
         .expect("error while building tauri application");

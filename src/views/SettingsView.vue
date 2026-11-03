@@ -37,6 +37,7 @@ const messages = ref<Record<string, string>>({})
 const cacheEnabled = ref(false)
 const cacheLimit = ref(256)
 const cacheUsed = ref(0)
+const confirmingClear = ref(false)
 function formatBytes(n: number): string {
   if (n < 1024) return n + ' B'
   if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB'
@@ -167,6 +168,25 @@ async function importHistory() {
     messages.value.history = '导入失败：' + e
   } finally {
     saving.value = ''
+  }
+}
+async function clearAllData() {
+  if (saving.value) return
+  saving.value = 'clear'
+  messages.value.clear = ''
+  // 主题、布局与阅读进度等偏好保存在 WebView localStorage 中。
+  try {
+    localStorage.clear()
+  } catch {
+    /* 存储不可用时忽略 */
+  }
+  try {
+    await invoke('clear_all_data')
+    messages.value.clear = '已清除，正在重启…'
+  } catch (e) {
+    messages.value.clear = '清除失败：' + e
+    saving.value = ''
+    confirmingClear.value = false
   }
 }
 async function save(kind: string) {
@@ -667,6 +687,52 @@ async function save(kind: string) {
             <button v-else class="btn btn-primary btn-sm" @click="app.logout()">去登录</button>
           </div>
         </section>
+        <section class="setting-group">
+          <div class="setting-title">
+            <AppIcon name="alert" />
+            <div>
+              <h2>清除数据</h2>
+              <p>删除本机保存的全部数据，恢复为全新安装状态</p>
+            </div>
+          </div>
+          <div class="setting-row">
+            <div>
+              <strong>清除所有本地数据</strong>
+              <p>
+                删除登录状态、全部设置、本地下载记录、封面缓存与更新缓存。下载目录中已保存的漫画文件不会被删除。
+              </p>
+            </div>
+            <div v-if="confirmingClear" class="clear-actions">
+              <button class="btn btn-danger btn-sm" :disabled="!!saving" @click="clearAllData">
+                {{ saving === 'clear' ? '清除中…' : '确认清除' }}
+              </button>
+              <button
+                class="btn btn-secondary btn-sm"
+                :disabled="!!saving"
+                @click="confirmingClear = false"
+              >
+                取消
+              </button>
+            </div>
+            <button
+              v-else
+              class="btn btn-danger btn-sm"
+              :disabled="!!saving"
+              @click="confirmingClear = true"
+            >
+              清除所有数据
+            </button>
+          </div>
+          <p class="hint">
+            清除后应用会自动重启，此操作不可撤销；如需保留下载记录，请先在上方「下载记录备份」中导出。
+          </p>
+          <span
+            role="status"
+            class="setting-message"
+            :class="{ error: messages.clear?.includes('失败') }"
+            >{{ messages.clear }}</span
+          >
+        </section>
         <AppUpdate />
       </div>
       <aside class="settings-aside">
@@ -684,3 +750,10 @@ async function save(kind: string) {
     </div>
   </div>
 </template>
+<style scoped>
+.clear-actions {
+  display: flex;
+  gap: 10px;
+  flex-shrink: 0;
+}
+</style>

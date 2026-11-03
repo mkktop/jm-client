@@ -186,6 +186,8 @@ async function fixture(page: Page, loggedIn = true, imagePlatform = 'windows') {
             case 'set_image_cache_settings':
             case 'clear_image_cache':
               return 0
+            case 'clear_all_data':
+              return null
             case 'get_promote':
               return [
                 {
@@ -380,6 +382,17 @@ test('settings exposes JM lines and saves download settings', async ({ page }) =
   await expect(page.getByText('设置已保存')).toBeVisible()
   const invoked = await calls(page)
   expect(invoked.some((call) => call.cmd === 'save_download_settings')).toBe(true)
+})
+
+test('settings clears all local data after confirmation', async ({ page }) => {
+  await fixture(page, true)
+  await page.goto('/settings')
+  await page.getByRole('button', { name: '清除所有数据' }).click()
+  expect((await calls(page)).some((call) => call.cmd === 'clear_all_data')).toBe(false)
+  await page.getByRole('button', { name: '确认清除' }).click()
+  await expect(page.getByText('已清除，正在重启…')).toBeVisible()
+  const invoked = await calls(page)
+  expect(invoked.some((call) => call.cmd === 'clear_all_data')).toBe(true)
 })
 
 test('download task can be paused', async ({ page }) => {

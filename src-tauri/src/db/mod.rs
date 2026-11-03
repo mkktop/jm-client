@@ -647,6 +647,31 @@ impl Database {
         Ok(())
     }
 
+    /// 清空全部本地数据（设置、下载记录、本地书库缓存），用于“清除所有数据”。
+    pub async fn wipe_all(&self) -> Result<(), sqlx::Error> {
+        let mut tx = self.pool.begin().await?;
+        for table in [
+            "download_queue",
+            "episodes",
+            "comics",
+            "download_history",
+            "settings",
+        ] {
+            sqlx::query(&format!("DELETE FROM {table}"))
+                .execute(&mut *tx)
+                .await?;
+        }
+        // 重置自增序列，让清除后的状态与全新安装一致。
+        sqlx::query("DELETE FROM sqlite_sequence")
+            .execute(&mut *tx)
+            .await
+            .ok();
+        tx.commit().await?;
+        // 回收磁盘空间；失败不影响清除结果。
+        let _ = sqlx::query("VACUUM").execute(&self.pool).await;
+        Ok(())
+    }
+
     pub async fn cleanup_missing_downloads(&self) -> Result<usize, sqlx::Error> {
         let rows = sqlx::query("SELECT comic_id, chapter_id, save_path FROM episodes WHERE downloaded = 1")
             .fetch_all(&self.pool)
@@ -810,6 +835,40 @@ mod tests {
             db.set_download_status("test", status, None).await.unwrap();
             assert_eq!(db.has_active_downloads().await.unwrap(), matches!(status, "pending" | "downloading"), "{status}");
         }
+        db.pool.close().await;
+    }
+
+    #[tokio::test]
+    async fn wipe_all_clears_settings_and_download_records() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        let db = Database { pool };
+        db.init_tables().await.unwrap();
+        db.set_setting("jm_login_domain", "example.net")
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO comics (comic_id, title) VALUES ('c1', '漫画')")
+            .execute(&db.pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO download_queue (id, comic_id, comic_title, chapter_id, episode_order, episode_title, status) VALUES ('t1', 'c1', '漫画', 'ch1', 1, '章节', 'completed')")
+            .execute(&db.pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO download_history (comic_id, title) VALUES ('c1', '漫画')")
+            .execute(&db.pool)
+            .await
+            .unwrap();
+
+        db.wipe_all().await.unwrap();
+
+        assert_eq!(db.get_setting("jm_login_domain").await.unwrap(), None);
+        assert!(db.get_comics(10, 0).await.unwrap().is_empty());
+        assert!(db.get_all_downloads(10).await.unwrap().is_empty());
+        assert!(db.get_download_history().await.unwrap().is_empty());
         db.pool.close().await;
     }
 }
