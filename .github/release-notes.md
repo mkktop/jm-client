@@ -1,4 +1,4 @@
-## JM Client v0.1.2
+## JM Client v0.1.3
 
 - 升级方式与 pika_client 对齐：设置页底部检查更新，应用内下载、显示进度，并在下载完成和安装前校验 SHA-256。
 - Windows 支持“退出并安装”；Mac 支持“退出并打开安装包”，拖入 Applications 替换旧版。

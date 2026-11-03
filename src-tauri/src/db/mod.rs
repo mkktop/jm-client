@@ -796,8 +796,13 @@ mod tests {
 
     #[tokio::test]
     async fn updater_blocks_only_running_or_queued_comic_downloads() {
-        let path = std::env::temp_dir().join(format!("jm-update-guard-{}.sqlite", uuid::Uuid::new_v4()));
-        let db = Database::new(path.to_str().unwrap()).await.unwrap();
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        let db = Database { pool };
+        db.init_tables().await.unwrap();
         assert!(!db.has_active_downloads().await.unwrap());
         sqlx::query("INSERT INTO download_queue (id, comic_id, comic_title, chapter_id, episode_order, episode_title, status) VALUES ('test', 'comic', '漫画', 'chapter', 1, '章节', 'pending')")
             .execute(&db.pool).await.unwrap();
@@ -806,6 +811,5 @@ mod tests {
             assert_eq!(db.has_active_downloads().await.unwrap(), matches!(status, "pending" | "downloading"), "{status}");
         }
         db.pool.close().await;
-        std::fs::remove_file(path).unwrap();
     }
 }
